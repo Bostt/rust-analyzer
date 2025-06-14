@@ -32,7 +32,7 @@ use triomphe::Arc;
 
 use crate::{
     CallableDefId, ClosureId, ComplexMemoryMap, Const, ConstData, ConstScalar, FnDefId, Interner,
-    MemoryMap, Substitution, TraitEnvironment, Ty, TyBuilder, TyExt, TyKind,
+    MemoryMap, Substitution, ToChalk, TraitEnvironment, Ty, TyBuilder, TyExt, TyKind,
     consteval::{ConstEvalError, intern_const_scalar, try_const_usize},
     db::{HirDatabase, InternedClosure},
     display::{ClosureStyle, DisplayTarget, HirDisplay},
@@ -2771,12 +2771,15 @@ impl Evaluator<'_> {
             Err(e) => {
                 let db = self.db;
                 let loc = variant.lookup(db);
-                let enum_loc = loc.parent.lookup(db);
                 let edition = self.crate_id.data(self.db).edition;
                 let name = format!(
                     "{}::{}",
-                    enum_loc.id.item_tree(db)[enum_loc.id.value].name.display(db, edition),
-                    loc.id.item_tree(db)[loc.id.value].name.display(db, edition),
+                    self.db.enum_signature(loc.parent).name.display(db, edition),
+                    self.db
+                        .enum_variants(loc.parent)
+                        .variant_name_by_id(variant)
+                        .unwrap()
+                        .display(db, edition),
                 );
                 Err(MirEvalError::ConstEvalError(name, Box::new(e)))
             }
@@ -2927,7 +2930,7 @@ pub fn render_const_using_debug_impl(
     let a2 = evaluator.heap_allocate(evaluator.ptr_size() * 2, evaluator.ptr_size())?;
     evaluator.write_memory(a2, &data.addr.to_bytes())?;
     let debug_fmt_fn_ptr = evaluator.vtable_map.id(TyKind::FnDef(
-        db.intern_callable_def(debug_fmt_fn.into()).into(),
+        CallableDefId::FunctionId(debug_fmt_fn).to_chalk(db),
         Substitution::from1(Interner, c.data(Interner).ty.clone()),
     )
     .intern(Interner));

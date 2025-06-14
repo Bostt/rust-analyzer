@@ -1,5 +1,5 @@
 use base_db::SourceDatabase;
-use hir_def::ModuleDefId;
+use hir_def::{DefWithBodyId, ModuleDefId};
 use test_fixture::WithFixture;
 
 use crate::{db::HirDatabase, test_db::TestDB};
@@ -156,7 +156,7 @@ pub struct NewStruct {
         let expected = vec![
             "parse_shim".to_owned(),
             "ast_id_map_shim".to_owned(),
-            "file_item_tree_shim".to_owned(),
+            "file_item_tree_query".to_owned(),
             "real_span_map_shim".to_owned(),
             "crate_local_def_map".to_owned(),
             "trait_impls_in_crate_shim".to_owned(),
@@ -216,7 +216,7 @@ pub enum SomeEnum {
         let expected = vec![
             "parse_shim".to_owned(),
             "ast_id_map_shim".to_owned(),
-            "file_item_tree_shim".to_owned(),
+            "file_item_tree_query".to_owned(),
             "real_span_map_shim".to_owned(),
             "crate_local_def_map".to_owned(),
             "trait_impls_in_crate_shim".to_owned(),
@@ -273,7 +273,7 @@ fn bar() -> f32 {
         let expected = vec![
             "parse_shim".to_owned(),
             "ast_id_map_shim".to_owned(),
-            "file_item_tree_shim".to_owned(),
+            "file_item_tree_query".to_owned(),
             "real_span_map_shim".to_owned(),
             "crate_local_def_map".to_owned(),
             "trait_impls_in_crate_shim".to_owned(),
@@ -342,7 +342,7 @@ impl SomeStruct {
         let expected = vec![
             "parse_shim".to_owned(),
             "ast_id_map_shim".to_owned(),
-            "file_item_tree_shim".to_owned(),
+            "file_item_tree_query".to_owned(),
             "real_span_map_shim".to_owned(),
             "crate_local_def_map".to_owned(),
             "trait_impls_in_crate_shim".to_owned(),
@@ -353,9 +353,96 @@ impl SomeStruct {
             "impl_self_ty_with_diagnostics_shim".to_owned(),
             "struct_signature_shim".to_owned(),
             "struct_signature_with_source_map_shim".to_owned(),
+            "attrs_shim".to_owned(),
             "type_for_adt_tracked".to_owned(),
         ];
 
         assert_eq!(expected, actual);
+    }
+}
+
+#[test]
+fn add_struct_invalidates_trait_solve() {
+    let (mut db, file_id) = TestDB::with_single_file(
+        "
+//- /main.rs crate:main
+struct SomeStruct;
+
+trait Trait<T> {
+    fn method(&self) -> T;
+}
+impl Trait<u32> for SomeStruct {}
+
+fn main() {
+    let s = SomeStruct;
+    s.method();
+    s.$0
+}",
+    );
+
+    {
+        let events = db.log_executed(|| {
+            let module = db.module_for_file(file_id.file_id(&db));
+            let crate_def_map = module.def_map(&db);
+            let mut defs: Vec<DefWithBodyId> = vec![];
+            visit_module(&db, crate_def_map, module.local_id, &mut |it| {
+                let def = match it {
+                    ModuleDefId::FunctionId(it) => it.into(),
+                    ModuleDefId::EnumVariantId(it) => it.into(),
+                    ModuleDefId::ConstId(it) => it.into(),
+                    ModuleDefId::StaticId(it) => it.into(),
+                    _ => return,
+                };
+                defs.push(def);
+            });
+
+            for def in defs {
+                let _inference_result = db.infer(def);
+            }
+        });
+        assert!(format!("{events:?}").contains("trait_solve_shim"))
+    }
+
+    let new_text = "
+//- /main.rs crate:main
+struct AnotherStruct;
+
+struct SomeStruct;
+
+trait Trait<T> {
+    fn method(&self) -> T;
+}
+impl Trait<u32> for SomeStruct {}
+
+fn main() {
+    let s = SomeStruct;
+    s.method();
+    s.$0
+}";
+
+    db.set_file_text(file_id.file_id(&db), new_text);
+
+    {
+        let events = db.log_executed(|| {
+            let module = db.module_for_file(file_id.file_id(&db));
+            let crate_def_map = module.def_map(&db);
+            let mut defs: Vec<DefWithBodyId> = vec![];
+
+            visit_module(&db, crate_def_map, module.local_id, &mut |it| {
+                let def = match it {
+                    ModuleDefId::FunctionId(it) => it.into(),
+                    ModuleDefId::EnumVariantId(it) => it.into(),
+                    ModuleDefId::ConstId(it) => it.into(),
+                    ModuleDefId::StaticId(it) => it.into(),
+                    _ => return,
+                };
+                defs.push(def);
+            });
+
+            for def in defs {
+                let _inference_result = db.infer(def);
+            }
+        });
+        assert!(!format!("{events:?}").contains("trait_solve_shim"))
     }
 }
