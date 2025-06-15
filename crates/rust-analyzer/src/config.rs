@@ -760,6 +760,8 @@ config_data! {
         /// though Cargo might be the eventual consumer.
         vfs_extraIncludes: Vec<String> = vec![],
 
+        /// Exclude imports from symbol search.
+        workspace_symbol_search_excludeImports: bool = false,
         /// Workspace symbol search kind.
         workspace_symbol_search_kind: WorkspaceSymbolSearchKindDef = WorkspaceSymbolSearchKindDef::OnlyTypes,
         /// Limits the number of items returned from a workspace symbol search (Defaults to 128).
@@ -1352,6 +1354,8 @@ pub struct RunnablesConfig {
 /// Configuration for workspace symbol search requests.
 #[derive(Debug, Clone)]
 pub struct WorkspaceSymbolConfig {
+    /// Should imports be excluded.
+    pub search_exclude_imports: bool,
     /// In what scope should the symbol be searched in.
     pub search_scope: WorkspaceSymbolSearchScope,
     /// What kind of symbol is being searched for.
@@ -1597,6 +1601,16 @@ impl Config {
             term_search_borrowck: self.assist_termSearch_borrowcheck(source_root).to_owned(),
         }
     }
+
+    pub fn diagnostic_fixes(&self, source_root: Option<SourceRootId>) -> DiagnosticsConfig {
+        // We always want to show quickfixes for diagnostics, even when diagnostics/experimental diagnostics are disabled.
+        DiagnosticsConfig {
+            enabled: true,
+            disable_experimental: false,
+            ..self.diagnostics(source_root)
+        }
+    }
+
     pub fn expand_proc_attr_macros(&self) -> bool {
         self.procMacro_enable().to_owned() && self.procMacro_attributes_enable().to_owned()
     }
@@ -2270,6 +2284,7 @@ impl Config {
 
     pub fn workspace_symbol(&self, source_root: Option<SourceRootId>) -> WorkspaceSymbolConfig {
         WorkspaceSymbolConfig {
+            search_exclude_imports: *self.workspace_symbol_search_excludeImports(source_root),
             search_scope: match self.workspace_symbol_search_scope(source_root) {
                 WorkspaceSymbolSearchScopeDef::Workspace => WorkspaceSymbolSearchScope::Workspace,
                 WorkspaceSymbolSearchScopeDef::WorkspaceAndDependencies => {
